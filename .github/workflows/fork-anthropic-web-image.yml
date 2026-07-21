@@ -71,8 +71,11 @@ jobs:
         run: >-
           docker run --rm ${{ env.IMAGE_NAME }}:anthropic-web python -c
           "from agent.anthropic_adapter import convert_tools_to_anthropic;
-          t=[{'type':'function','function':{'name':'web_search','parameters':{'type':'object'},'_anthropic_server_tool':{'type':'web_search_20250305','name':'web_search'}}}];
-          assert convert_tools_to_anthropic(t, 'https://api.anthropic.com')[0]['type']=='web_search_20250305'"
+          from agent.transports.chat_completions import ChatCompletionsTransport;
+          t=[{'type':'function','function':{'name':'web_search','parameters':{'type':'object'},'_hermes_server_tool':{'api_mode':'anthropic_messages','definition':{'type':'web_search_20250305','name':'web_search'}}}}];
+          assert convert_tools_to_anthropic(t, 'https://api.anthropic.com')[0]['type']=='web_search_20250305';
+          assert convert_tools_to_anthropic(t, 'https://api.minimax.io/anthropic')==[];
+          assert ChatCompletionsTransport().convert_tools(t)==[]"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
