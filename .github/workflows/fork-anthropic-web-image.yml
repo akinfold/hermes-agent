@@ -1,0 +1,90 @@
+name: Fork image — Anthropic web tools
+
+on:
+  push:
+    branches: [build/anthropic-web]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fork-anthropic-web-image
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/akinfold/hermes-agent
+
+jobs:
+  test-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install test dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra dev --extra anthropic
+
+      - name: Test Anthropic web-tool contracts
+        env:
+          ANTHROPIC_API_KEY: ""
+          OPENAI_API_KEY: ""
+          OPENROUTER_API_KEY: ""
+          NOUS_API_KEY: ""
+        run: |
+          scripts/run_tests.sh \
+            tests/agent/test_anthropic_web_server_tools.py \
+            tests/agent/test_anthropic_output_field_leak.py \
+            tests/agent/transports/test_transport.py \
+            tests/agent/test_anthropic_thinking_block_order.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_NAME }}:anthropic-web
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=fork-anthropic-web-amd64
+          cache-to: type=gha,mode=max,scope=fork-anthropic-web-amd64
+
+      - name: Smoke-test native tool serialization in the image
+        run: >-
+          docker run --rm ${{ env.IMAGE_NAME }}:anthropic-web python -c
+          "from agent.anthropic_adapter import convert_tools_to_anthropic;
+          t=[{'type':'function','function':{'name':'web_search','parameters':{'type':'object'},'_anthropic_server_tool':{'type':'web_search_20250305','name':'web_search'}}}];
+          assert convert_tools_to_anthropic(t, 'https://api.anthropic.com')[0]['type']=='web_search_20250305'"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable and rolling tags
+        env:
+          SHA_TAG: sha-${{ github.sha }}
+        run: |
+          docker tag "${IMAGE_NAME}:anthropic-web" "${IMAGE_NAME}:${SHA_TAG}"
+          docker push "${IMAGE_NAME}:anthropic-web"
+          docker push "${IMAGE_NAME}:${SHA_TAG}"
